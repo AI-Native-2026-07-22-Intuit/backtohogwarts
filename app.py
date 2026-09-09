@@ -1820,6 +1820,12 @@ function ensureAudio(){
   if(!noiseBuf){ noiseBuf=audioCtx.createBuffer(1,audioCtx.sampleRate*2,audioCtx.sampleRate);
     const d=noiseBuf.getChannelData(0); for(let i=0;i<d.length;i++) d[i]=Math.random()*2-1; }
 }
+// boot() below reconnects straight from localStorage with no click involved
+// (a refresh, a dropped Wi-Fi, Render waking up) — so ensureAudio() never
+// runs, the browser's autoplay policy leaves audioCtx stuck unset, and every
+// sfx call silently no-ops from then on. The next real tap or keypress
+// anywhere on the page is a genuine gesture, so use it to unlock audio.
+['pointerdown','keydown'].forEach(ev=>document.addEventListener(ev,ensureAudio,{once:true}));
 function tone(f,st,dur,type,vol,endF){
   if(muted||!audioCtx) return;
   const t0=audioCtx.currentTime+st, o=audioCtx.createOscillator(), g=audioCtx.createGain();
