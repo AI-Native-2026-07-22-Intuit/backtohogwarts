@@ -69,6 +69,9 @@ QUID_SECONDS = 180      # 3 minutes — long enough to learn the broom, then pla
 QUID_COUNTDOWN = 5      # brooms-up pause before the whistle
 GOAL_POINTS = 10
 SNITCH_POINTS = 150
+BONUS_WIN_POINTS = 60    # an extra match the host calls after the Cup is decided —
+BONUS_LOSE_POINTS = 20   # real points, but well under a semifinal's 300/100 so it
+                          # can be played purely for fun without threatening the Cup
 
 # Potions
 POTION_CORRECT_POINTS = 50      # to your house for a correct brew
@@ -333,6 +336,8 @@ def fresh_quidditch():
         "flash": None,
         "winners": {},
         "finalScore": {},
+        "bonusCount": 0,          # how many extra matches have been played
+        "bonusLog": [],           # [{match, houses:[a,c], winner, score:{a:n,c:n}}, …]
         "bodies": {},             # pid -> {x,y,vx,vy,fx,fy,stun,house}
         "quaffle": {"x": FIELD_W / 2, "y": FIELD_H / 2, "vx": 0.0, "vy": 0.0, "carrier": None, "cool": 0.0},
         "bludgers": [],
@@ -525,6 +530,7 @@ def public_state(for_name: Optional[str] = None):
             "startsAt": q["startsAt"], "snitchOut": q["snitchOut"],
             "events": q["events"][-4:], "winners": q["winners"], "finalScore": q["finalScore"],
             "field": [FIELD_W, FIELD_H], "snitchPoints": SNITCH_POINTS,
+            "bonusLog": q["bonusLog"][-6:], "bonusWinPoints": BONUS_WIN_POINTS, "bonusLosePoints": BONUS_LOSE_POINTS,
         },
         "housecup": dict(STATE["housecup"]),
         "certificate": certificate_data() if STATE["housecup"]["revealed"] else None,
@@ -677,7 +683,11 @@ def start_quid_match(match: str):
     b = q["bracket"]
     if not b:
         return None
-    pair = {"semi1": b["semi1"], "semi2": b["semi2"], "final": b.get("finalists") or []}.get(match)
+    # semi1/semi2 pair from the draw, final from whoever advanced, and any
+    # other key (bonusN) is looked up directly — start_quid_bonus puts the
+    # pair there itself.
+    known = {"semi1": b.get("semi1"), "semi2": b.get("semi2"), "final": b.get("finalists") or []}
+    pair = known[match] if match in known else b.get(match)
     if not pair or len(pair) != 2:
         return None
     RT_GEN += 1
@@ -701,6 +711,29 @@ def start_quid_match(match: str):
     spawn_bodies()
     say("quidditch", "Brooms up!", "info")
     return RT_GEN
+
+
+def start_quid_bonus(house_a: str, house_b: str):
+    """An extra match the host calls on demand — any two houses, any number
+    of times, after the semis and Final are done (or even instead of them,
+    for a friends game with no bracket at all). Scored lightly on purpose
+    (BONUS_WIN_POINTS/BONUS_LOSE_POINTS) so it can't rewrite who wins the Cup.
+
+    Reuses start_quid_match's setup by giving it a synthetic "bonusN" match
+    name and a one-off bracket entry, rather than duplicating the whole
+    match-setup block."""
+    global RT_GEN
+    q = STATE["quidditch"]
+    if house_a not in HOUSES or house_b not in HOUSES or house_a == house_b:
+        return None
+    if q["matchState"] in ("countdown", "live"):
+        return None          # one match on the pitch at a time
+    q["bonusCount"] += 1
+    key = f"bonus{q['bonusCount']}"
+    if q["bracket"] is None:
+        q["bracket"] = {"semi1": [], "semi2": [], "finalists": []}
+    q["bracket"][key] = [house_a, house_b]
+    return start_quid_match(key)
 
 
 def step_quidditch():
@@ -912,7 +945,15 @@ def finish_quid_match():
     q["winners"][match] = winner
     q["finalScore"][match] = {a: sa, c: sc}
     b = q["bracket"]
-    if match in ("semi1", "semi2"):
+    if match.startswith("bonus"):
+        # a host-called extra match: real points, deliberately light, and it
+        # never touches the bracket or the finalists — the Cup result this
+        # match could have already decided stays decided.
+        award(winner, BONUS_WIN_POINTS, "Quidditch: bonus match win")
+        award(loser, BONUS_LOSE_POINTS, "Quidditch: bonus match — well flown")
+        q["bonusLog"].append({"match": match, "houses": [a, c], "winner": winner,
+                              "score": {a: sa, c: sc}})
+    elif match in ("semi1", "semi2"):
         b.setdefault("finalists", [])
         if winner not in b["finalists"]:
             b["finalists"].insert(0, winner) if match == "semi1" else b["finalists"].append(winner)
@@ -1229,6 +1270,7 @@ def certificate_data():
         "quidditch": {
             "winners": STATE["quidditch"]["winners"],
             "finalScore": STATE["quidditch"]["finalScore"],
+            "bonusLog": STATE["quidditch"]["bonusLog"],
         },
         "gringotts": {
             "freed": [c["name"] for c in STATE["gringotts"]["cages"] if c["free"]],
@@ -1346,6 +1388,11 @@ async def host_action(action: str, payload: dict):
 
     elif action == "quidditch_start_match":
         gen = start_quid_match(payload.get("match"))
+        if gen:
+            asyncio.create_task(rt_loop(gen))
+
+    elif action == "quidditch_start_bonus":
+        gen = start_quid_bonus(payload.get("a", ""), payload.get("b", ""))
         if gen:
             asyncio.create_task(rt_loop(gen))
 
@@ -1564,7 +1611,14 @@ h1,h2,h3{font-family:'Cinzel',serif; letter-spacing:.02em; margin:0;}
 .deco{font-family:'Cinzel Decorative',serif;}
 .mono{font-family:'JetBrains Mono',monospace;}
 #app{min-height:100vh; display:flex; flex-direction:column;}
-.screen{flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; padding:30px 16px 78px; animation:fadein .4s ease both;}
+/* #app is a flex column, so .screen is a flex item; align-items:stretch (the
+   parent's default) makes it fill the full width. That's fine for a bare
+   .screen, but the ".wide" variant below caps width with max-width — and a
+   stretched item that hits its max-width just stops growing, it does NOT
+   recentre itself, so it hugs the left edge with the leftover space stranded
+   on the right. margin:0 auto is what tells a capped flex item to split that
+   leftover space evenly instead of dumping it on one side. */
+.screen{flex:1; width:100%; margin:0 auto; display:flex; flex-direction:column; align-items:center; justify-content:center; padding:30px 16px 78px; animation:fadein .4s ease both;}
 @keyframes fadein{from{opacity:0; transform:translateY(8px);} to{opacity:1; transform:none;}}
 .card{background:linear-gradient(180deg, var(--stone-800), var(--stone-900)); border:1px solid rgba(212,175,55,.22);
   border-radius:var(--radius); box-shadow:0 20px 60px rgba(0,0,0,.5); padding:24px; max-width:780px; width:100%;}
@@ -2913,8 +2967,12 @@ function viewQuidditch(){
   const q=S.quidditch, st=(FR&&FR.st)||q.matchState, host=myRole==='host';
   const live=st==='countdown'||st==='live';
   const [a,b]=q.houses||[];
+  // the semi/final summary cards only make sense once a real bracket has
+  // been drawn — a bonus-only night (no "Draw the Matches" at all) shouldn't
+  // show three cards all reading "awaiting the semifinals"
+  const hasBracket = q.bracket && ((q.bracket.semi1||[]).length===2 || (q.bracket.semi2||[]).length===2);
   let bracket='';
-  if(q.bracket){
+  if(hasBracket){
     const m=(k,l)=>{ const pr=k==='final'?(q.bracket.finalists||[]):q.bracket[k]; const w=q.winners[k]; const sc=q.finalScore[k];
       return `<div class="card" style="min-width:200px;max-width:250px;padding:12px"><div class="eyebrow">${l}</div>
         ${pr&&pr.length===2?`<div class="row" style="gap:6px"><span class="house-pill house-${pr[0]}">${pr[0]}</span>
@@ -2937,9 +2995,12 @@ function viewQuidditch(){
         <div class="panel clock" id="qClock">--</div></div>
         <div class="hud-bot"><div class="ticker" id="qTicker"></div></div></div></div>`;
   } else {
-    main=`<div class="card center"><p class="narration" style="max-width:640px;margin:0 auto">
-      ${!q.bracket?'Four houses. Two semifinals. One Final. Every player flies their own broom — the crowd cannot save you.'
-        :(q.winners.final?`🏆 ${q.winners.final} win the Quidditch Cup`:'The next match is set. Brooms up.')}</p></div>`;
+    let msg;
+    if(q.winners.final) msg=`🏆 ${q.winners.final} win the Quidditch Cup`;
+    else if(hasBracket) msg='The next match is set. Brooms up.';
+    else if((q.bonusLog||[]).length) msg='Set up another match below, or draw the bracket for the semis and Final.';
+    else msg='Four houses. Two semifinals. One Final. Every player flies their own broom — the crowd cannot save you.';
+    main=`<div class="card center"><p class="narration" style="max-width:640px;margin:0 auto">${msg}</p></div>`;
   }
   let ctrl='';
   if(myRole==='player'&&live){
@@ -2960,6 +3021,7 @@ function viewQuidditch(){
     ${live?'':`<p class="sub">${host?'Draw the matches, then send them up.':'Your broom appears here when your house is called.'}</p>`}
     ${(myRole==='player'&&live)?'':bracket}${main}${ctrl}
     ${host?quidHostCtrl(q,st):''}
+    ${host&&!live?bonusPicker(q):''}
     ${phaseJumper()}</div>`;
   if(live) startPitch();
   if(myRole==='player'&&live&&inMatch()) wireFlight();
@@ -2977,6 +3039,38 @@ function quidHostCtrl(q,st){
   return `<div class="row" style="margin-top:18px">${b}</div>`;
 }
 function startMatch(m){ sfx.whistle(); send('host_action','quidditch_start_match',{match:m}); }
+
+// Any two houses, as many times as the host likes — a small, deliberately
+// under-weighted bonus (see BONUS_WIN_POINTS/BONUS_LOSE_POINTS in app.py) so
+// it can't rewrite who's actually winning the Cup. Available any time the
+// pitch is empty, whether or not the bracket has even been drawn.
+function houseOptions(selected){
+  return HOUSES.map(h=>`<option value="${h}" ${h===selected?'selected':''}>${h}</option>`).join('');
+}
+function bonusPicker(q){
+  const win=q.bonusWinPoints||60, lose=q.bonusLosePoints||20;
+  const log=(q.bonusLog||[]).slice(-3).reverse().map(bm=>{
+    const [ha,hb]=bm.houses, loserH=bm.winner===ha?hb:ha;
+    return `<div class="small" style="opacity:.8;margin-top:3px">🏆 <span style="color:${GLOW[bm.winner]}">${bm.winner}</span> beat ${loserH} — ${bm.score[ha]}–${bm.score[hb]}</div>`;
+  }).join('');
+  return `<div class="card" style="margin-top:16px;max-width:520px;padding:16px 20px">
+    <div class="eyebrow" style="margin-bottom:4px">Play another match?</div>
+    <p class="small" style="margin:0 0 10px">Any two houses, as many times as you like — worth +${win} to the winner
+      and +${lose} to the loser, well under a semifinal, so it's just for fun.</p>
+    <div class="row" style="gap:8px;align-items:center;flex-wrap:wrap">
+      <select id="bonusA" class="mono">${houseOptions(HOUSES[0])}</select>
+      <span class="small">vs</span>
+      <select id="bonusB" class="mono">${houseOptions(HOUSES[1])}</select>
+      <button class="btn ghost" onclick="startBonus()">Start this match</button>
+    </div>
+    ${log?`<div style="margin-top:8px">${log}</div>`:''}
+  </div>`;
+}
+function startBonus(){
+  const a=document.getElementById('bonusA').value, b=document.getElementById('bonusB').value;
+  if(a===b){ alert('Pick two different houses to play each other.'); return; }
+  sfx.whistle(); send('host_action','quidditch_start_bonus',{a,b});
+}
 
 function wireFlight(){
   const stick=document.getElementById('stick'), knob=document.getElementById('knob'), btn=document.getElementById('actBtn');
@@ -3385,6 +3479,7 @@ function showCert(){
         :'<p class="small" style="color:#6b4f1c">No honours recorded.</p>'}
       <h2>The Quidditch Cup</h2>
       <p style="margin:4px 0">${(c.quidditch&&c.quidditch.winners&&c.quidditch.winners.final)?`<b>${c.quidditch.winners.final}</b> took the Final${(function(){const f=c.quidditch.finalScore&&c.quidditch.finalScore.final; if(!f) return '';const k=Object.keys(f); return k.length===2?` (${k[0]} ${f[k[0]]} – ${f[k[1]]} ${k[1]})`:'';})()}.`:'The Final went unplayed.'}</p>
+      ${(c.quidditch&&c.quidditch.bonusLog&&c.quidditch.bonusLog.length)?`<p style="margin:4px 0" class="small">Plus ${c.quidditch.bonusLog.length} extra match${c.quidditch.bonusLog.length===1?'':'es'}: ${c.quidditch.bonusLog.map(b=>{const [ha,hb]=b.houses; return `<b>${b.winner}</b> over ${b.winner===ha?hb:ha} (${b.score[ha]}–${b.score[hb]})`;}).join('; ')}.</p>`:''}
       <h2>The Gringotts Heist</h2>
       <p style="margin:4px 0">${(c.gringotts.freed||[]).length===3?'Harry, Ron and Hermione were all brought out of the vault':((c.gringotts.freed||[]).length?'Freed from the vault: '+c.gringotts.freed.join(', '):'The vault kept its prisoners')}${c.gringotts.clanks?`, with ${c.gringotts.clanks} clanks raised against the dragon`:''}.</p>
       <h2>The Houses</h2>
