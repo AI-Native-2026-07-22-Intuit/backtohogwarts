@@ -64,8 +64,9 @@ QUAFFLE_DRAG = 0.985
 BLUDGER_R = 30
 STUN_SECONDS = 2.2
 SNITCH_R = 26
-SNITCH_AT = 30          # seconds remaining when the Snitch is released
-QUID_SECONDS = 100
+SNITCH_AT = 40          # seconds remaining when the Snitch is released
+QUID_SECONDS = 180      # 3 minutes — long enough to learn the broom, then play
+QUID_COUNTDOWN = 5      # brooms-up pause before the whistle
 GOAL_POINTS = 10
 SNITCH_POINTS = 150
 
@@ -686,8 +687,8 @@ def start_quid_match(match: str):
     q["matchState"] = "countdown"
     q["houses"] = [a, c]
     q["score"] = {a: 0, c: 0}
-    q["startsAt"] = now + 3
-    q["endsAt"] = now + 3 + QUID_SECONDS
+    q["startsAt"] = now + QUID_COUNTDOWN
+    q["endsAt"] = now + QUID_COUNTDOWN + QUID_SECONDS
     q["snitchOut"] = False
     q["events"] = []
     q["flash"] = None
@@ -1489,7 +1490,7 @@ app = Starlette(routes=[
 ])
 
 # Filled in by build_bundle.py — leave the empty default in the source copy.
-EMBEDDED_INDEX = r"""<!doctype html>
+EMBEDDED_INDEX = """<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -1614,6 +1615,13 @@ canvas.stage{display:block; width:100%; height:auto; background:#05050b; border-
 .rune-btn:active{transform:scale(.95);background:linear-gradient(180deg,#4a3f6b,#2b2740);}
 .rune-btn.hit{animation:runehit .45s ease;}
 @keyframes runehit{0%{box-shadow:0 0 0 0 rgba(94,232,143,.9);}100%{box-shadow:0 0 0 22px rgba(94,232,143,0);}}
+.rune-btn.called{border-color:var(--gold-hi);color:#241a04;background:linear-gradient(180deg,#fff0bd,var(--gold));
+  box-shadow:0 0 26px rgba(245,221,138,.55);}
+.rune-call{display:flex;flex-direction:column;align-items:center;gap:2px;padding:6px 22px;border-radius:16px;
+  border:1px solid rgba(212,175,55,.35);background:rgba(20,17,32,.75);}
+.rune-call .big-rune{font-size:clamp(2.6rem,13vw,4rem);}
+.rune-call .big-rune.turn{animation:runeturn .35s ease;}
+@keyframes runeturn{0%{transform:scale(.6);opacity:.2;}100%{transform:scale(1);opacity:1;}}
 .gob-grid{display:flex;flex-wrap:wrap;gap:8px;justify-content:center;}
 .gob-btn{min-width:56px;padding:12px 10px;border-radius:12px;background:linear-gradient(180deg,#4a2b18,#2a1710);
   border:1px solid #7a4a22;color:#ffd9a8;font-family:'JetBrains Mono',monospace;font-weight:700;font-size:1.2rem;cursor:pointer;}
@@ -1631,6 +1639,32 @@ canvas.stage{display:block; width:100%; height:auto; background:#05050b; border-
 .meter{height:14px;border-radius:99px;background:rgba(255,255,255,.09);overflow:hidden;border:1px solid rgba(255,255,255,.12);}
 .meter i{display:block;height:100%;background:linear-gradient(90deg,var(--ember),var(--gold-hi));transition:width .2s;}
 .you-badge{font-family:'Cinzel',serif;font-weight:700;color:var(--gold-hi);}
+
+/* ---------- lobby: one unsorted hall, no houses yet ---------- */
+.arrivals{display:grid; grid-template-columns:repeat(auto-fill,minmax(150px,1fr)); gap:6px 14px;}
+.arrival{display:flex; align-items:center; gap:8px; font-size:.88rem; opacity:.32; padding:3px 2px;}
+.arrival.here{opacity:1;}
+.arrival .dot{width:7px;height:7px;border-radius:50%;flex:0 0 auto;}
+
+/* ---------- the shared stage, mirrored onto a player's own device ----------
+   --ar is the canvas aspect ratio; capping the WIDTH by (height * ar) keeps
+   the picture undistorted while guaranteeing the controls stay on screen. */
+.stage-wrap.mirror{max-width:min(100%, calc(var(--mh,40vh) * var(--ar,1.78))); margin:0 auto;}
+.stage-wrap.mirror .hud-top{top:6px;left:8px;right:8px;}
+.stage-wrap.mirror .hud-bot{bottom:6px;left:8px;right:8px;}
+.stage-wrap.mirror .panel{padding:4px 9px;}
+.stage-wrap.mirror .clock{font-size:1.05rem;}
+.stage-wrap.mirror .ticker{font-size:.72rem; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; opacity:.85;}
+/* a nudge that only appears on a phone held upright, where the pitch is
+   width-limited and turning sideways genuinely doubles it */
+.rotate-hint{display:none;}
+@media (max-width:560px) and (orientation:portrait){ .rotate-hint{display:block;} }
+@media (max-height:760px){
+  .stick{width:150px;height:150px;} .stick .knob{width:58px;height:58px;}
+  .act-btn{width:104px;height:104px;font-size:.82rem;}
+  .clank-btn{padding:24px 18px;}
+  .stage-wrap.mirror{--mh:32vh;}
+}
 
 .exam-paper{background:linear-gradient(180deg,#f6ecd2,#e8dab8);color:#241c0e;border-radius:12px;padding:14px 16px;width:100%;
   box-shadow:0 12px 34px rgba(0,0,0,.45);border:1px solid rgba(90,60,20,.3);}
@@ -1875,16 +1909,20 @@ function viewLobby(){
     <h1 class="title-xl deco">Back to Hogwarts</h1>
     <p class="sub">House Cup Night — the candles are lit, the Hall is filling.</p>
     <p class="mono" style="color:var(--gold-hi);font-size:1.25rem">${here} / ${all.length} arrived</p>
-    <div class="card wide"><div class="row" style="align-items:flex-start">
-      ${HOUSES.map(h=>`<div style="flex:1;min-width:180px">
-        <div class="house-pill house-${h}">${h}</div>
-        <div style="margin-top:8px;display:flex;flex-direction:column;gap:4px">
-        ${(mem[h]||[]).concat((S.guestMembers&&S.guestMembers[h])||[]).map(n=>{
-          const on=!!(r[n]&&r[n].connected), guest=!((mem[h]||[]).includes(n));
-          return `<div style="font-size:.86rem;opacity:${on?1:.3};display:flex;align-items:center;gap:7px">
-            <span style="width:7px;height:7px;border-radius:50%;background:${on?'#5ee88f':'#4a4658'};box-shadow:${on?'0 0 8px #5ee88f':'none'}"></span>${n}${guest?' <span class="small" style="opacity:.6">· guest</span>':''}</div>`;}).join('')}
-        </div></div>`).join('')}
-    </div></div>
+    <div class="card wide">
+      <div class="eyebrow center">The Hall — unsorted</div>
+      <p class="small center" style="margin:2px 0 12px">Nobody has a house yet. The Hat hasn't spoken.</p>
+      <div class="arrivals">
+      ${(()=>{ const guests=Object.values(S.guestMembers||{}).flat();
+        const names=all.slice().sort((x,y)=>x.localeCompare(y))
+                      .concat(guests.slice().sort((x,y)=>x.localeCompare(y)));
+        return names.map(n=>{
+          const on=!!(r[n]&&r[n].connected), guest=!all.includes(n);
+          return `<div class="arrival${on?' here':''}">
+            <span class="dot" style="background:${on?'#5ee88f':'#4a4658'};box-shadow:${on?'0 0 8px #5ee88f':'none'}"></span>${n}${guest?' <span class="small" style="opacity:.55">· guest</span>':''}</div>`;}).join('');
+      })()}
+      </div>
+    </div>
     ${myRole==='host'?`<div class="row" style="margin-top:18px"><button class="btn big" onclick="sfx.whoosh();send('host_action','goto_phase',{phase:'sorting'})">Begin the Sorting Ceremony</button></div>`
       :`<p class="small" style="margin-top:14px">You're in. Keep this tab open — it becomes your wand, your ladle and your broom. 🕯️</p>`}
   ${phaseJumper()}
@@ -2323,7 +2361,7 @@ function viewOwls(){
     ${(myRole==='player'&&st==='live')
       ? `<h2 style="color:var(--gold-hi);font-size:1.1rem;margin-bottom:6px">O.W.L. Examination</h2>`
       : `<div class="eyebrow">Chapter Four</div><h1 class="title-xl deco">Ordinary Wizarding Levels</h1>
-         <p class="sub">Ten questions. Java, React, Kubernetes, AWS, LLMs and MCP. Quills ready.</p>`}
+         <p class="sub">Eighteen questions. Java, React, Kubernetes, AWS, LLMs and MCP. Quills ready.</p>`}
     ${host?`<div class="stage-wrap"><canvas id="owlCv" class="stage" width="1200" height="620"></canvas>
       <div class="hud"><div class="hud-top">
         <div class="panel"><div class="eyebrow" style="margin:0">The Great Hall — examinations</div>
@@ -2470,6 +2508,8 @@ function loopOwl(){
 
 /* ========================= GRINGOTTS — free the trio ========================= */
 let vCv=null,vCx=null,vRaf=null,zaps=[],lastRune='';
+// same idea as pitchMini: the vault is mirrored onto phones, so labels grow
+let vaultMini=false;
 const CAGE_Y=(i)=>140+i*152+18;   // MUST match the goblin lane maths in app.py
 const VY=18;
 function viewGringotts(){
@@ -2479,7 +2519,8 @@ function viewGringotts(){
   if(myRole==='player'){
     if(st==='live'){
       ctrl=`<div class="ctrl-wrap">
-        <p class="small center">Watch the shared screen. Cast the rune it calls — then swat the goblins by their letter.</p>
+        <div class="rune-call"><span class="eyebrow" style="margin:0">Cast this rune</span>
+          <span class="big-rune" id="runeCall">·</span></div>
         <div class="rune-grid">${(g.runes||[]).map(r=>`<button class="rune-btn" data-r="${r}" onclick="castRune('${r}')">${r}</button>`).join('')}</div>
         <div style="width:100%"><p class="small center" style="margin:6px 0">Goblins in the vault — tap to Stupefy (or press the key)</p>
         <div class="gob-grid" id="gobGrid"></div></div></div>`;
@@ -2495,21 +2536,22 @@ function viewGringotts(){
       ? `<h2 style="color:var(--gold-hi);font-size:1.1rem;margin-bottom:6px">Gringotts — free the trio</h2>`
       : `<div class="eyebrow">Chapter Three</div><h1 class="title-xl deco">Gringotts — The Goblin Vault</h1>
          <p class="sub">Harry, Ron and Hermione are locked in the deep vaults. The Hall has one shot at them.</p>`}
-    ${host?`<div class="stage-wrap"><canvas id="vCv" class="stage" width="1040" height="640"></canvas>
+    ${(host||st==='live'||st==='dragon')?`<div class="stage-wrap${host?'':' mirror'}" style="--ar:1.62">
+      <canvas id="vCv" class="stage" width="1040" height="640"></canvas>
       <div class="hud">
-        <div style="position:absolute;top:10px;left:50%;transform:translateX(-50%);text-align:center">
+        ${host?`<div style="position:absolute;top:10px;left:50%;transform:translateX(-50%);text-align:center">
           <div class="panel" style="padding:6px 26px" id="runePanel">
             <div class="eyebrow" style="margin:0">Everyone — cast this rune</div>
             <div class="big-rune" id="runeBig" style="font-size:clamp(2.6rem,6vw,4.4rem)">·</div>
-          </div></div>
-        <div style="position:absolute;top:12px;right:14px" class="panel clock" id="vClock">--</div>
-        <div style="position:absolute;top:12px;left:14px" class="panel small" id="vFreed">0 / 3 free</div>
+          </div></div>`:''}
+        <div style="position:absolute;top:${host?12:6}px;right:${host?14:8}px" class="panel clock" id="vClock">--</div>
+        <div style="position:absolute;top:${host?12:6}px;left:${host?14:8}px" class="panel small" id="vFreed">0 / 3 free</div>
         <div class="hud-bot"><div class="ticker" id="vTicker"></div></div></div></div>`:''}
     ${ctrl}
     ${host?grinHostCtrl(g,st):''}
     ${phaseJumper()}
   </div>`;
-  if(host) startVault();
+  if(host||st==='live'||st==='dragon') startVault();
   if(myRole==='player'&&st==='dragon') wireClank();
   if(myRole==='player'&&st==='live') wireGoblinKeys();
   grinHud();
@@ -2547,6 +2589,12 @@ function grinHud(){
   const g=S.gringotts, st=(FR&&FR.st)||g.state;
   const rune=(FR&&FR.rune)||g.rune;
   const rb=document.getElementById('runeBig'); if(rb) rb.textContent=rune||'·';
+  const rc=document.getElementById('runeCall');
+  if(rc&&rc.textContent!==(rune||'·')){ rc.textContent=rune||'·';
+    rc.classList.remove('turn'); void rc.offsetWidth; rc.classList.add('turn'); }
+  // the matching key on the player's own pad lights up, so nobody has to
+  // read the shared screen and find the button at the same time
+  document.querySelectorAll('.rune-btn').forEach(b=>b.classList.toggle('called',b.dataset.r===rune));
   const rp=document.getElementById('runePanel'); if(rp) rp.style.display=(st==='dragon'?'none':'block');
   const fr=document.getElementById('vFreed');
   if(fr){ const n=(FR&&FR.freed!=null)?FR.freed:g.freed; fr.textContent=n+' / 3 free'; }
@@ -2559,7 +2607,8 @@ function grinHud(){
       c.className='panel clock'+(tl<30?' urgent':''); }
   }
   const tk=document.getElementById('vTicker');
-  if(tk){ const ev=((FR&&FR.ev)||g.events||[]).slice(-3); tk.innerHTML=ev.map(e=>`<div>${e.text}</div>`).join('')||'<div>The cart rattles deeper…</div>'; }
+  if(tk){ const ev=((FR&&FR.ev)||g.events||[]).slice(myRole==='host'?-3:-1);
+    tk.innerHTML=ev.map(e=>`<div>${e.text}</div>`).join('')||'<div>The cart rattles deeper…</div>'; }
   // player goblin buttons
   const grid=document.getElementById('gobGrid');
   if(grid&&FR&&FR.gob){
@@ -2575,7 +2624,8 @@ function grinHud(){
   if(st==='dragon'&&lastGrinState!=='dragon'){ sfx.dragon(); wash('rgba(224,102,58,.45)'); }
   lastGrinState=st;
 }
-function startVault(){ vCv=document.getElementById('vCv'); if(!vCv) return; vCx=vCv.getContext('2d'); zaps=[]; stopVault(); loopVault(); }
+function startVault(){ vCv=document.getElementById('vCv'); if(!vCv) return; vCx=vCv.getContext('2d');
+  vaultMini=myRole!=='host'; zaps=[]; stopVault(); loopVault(); }
 function stopVault(){ if(vRaf){ cancelAnimationFrame(vRaf); vRaf=null; } }
 function captive(cx,x,y,colour,name,free){
   // A robed silhouette — deliberately generic, identified by its name plate.
@@ -2590,8 +2640,10 @@ function captive(cx,x,y,colour,name,free){
   cx.fillStyle=free?'#ffe9a8':'#3a3348'; cx.beginPath(); cx.arc(0,-38,7,0,7); cx.fill();
   cx.restore();
 }
+let vaultSkip=false;
 function loopVault(){
   vRaf=requestAnimationFrame(loopVault);
+  if(vaultMini){ vaultSkip=!vaultSkip; if(vaultSkip) return; }
   const cx=vCx; if(!cx||!S) return;
   const W=1040,H=640,t=performance.now()/1000;
   const g=S.gringotts, st=(FR&&FR.st)||g.state;
@@ -2646,20 +2698,21 @@ function loopVault(){
       cx.globalAlpha=1;
     }
     // name plate, inside the top of the cage so it can't collide with the row above
-    cx.font='700 14px Cinzel, serif'; cx.textAlign='center';
+    const nfs=vaultMini?24:14, nph=vaultMini?32:21;
+    cx.font=`700 ${nfs}px Cinzel, serif`; cx.textAlign='center';
     const label=free?(c.name+'  ✦ FREE'):c.name;
     const nw=cx.measureText(label).width+18;
-    cx.fillStyle='rgba(6,6,12,.86)'; cx.fillRect(cxp-nw/2,cy-50,nw,21);
+    cx.fillStyle='rgba(6,6,12,.86)'; cx.fillRect(cxp-nw/2,cy-50,nw,nph);
     cx.strokeStyle=free?'#ffe9a8':'rgba(255,255,255,.2)'; cx.lineWidth=1.4;
-    cx.strokeRect(cxp-nw/2,cy-50,nw,21);
-    cx.fillStyle=free?'#ffe9a8':c.colour; cx.fillText(label,cxp,cy-35);
+    cx.strokeRect(cxp-nw/2,cy-50,nw,nph);
+    cx.fillStyle=free?'#ffe9a8':c.colour; cx.fillText(label,cxp,cy-50+nph-(vaultMini?9:6));
     // lock progress, tucked under the bars
     if(!free){
       const pct=Math.min(1,c.progress/(g.cageTarget||14));
       cx.fillStyle='rgba(255,255,255,.13)'; cx.fillRect(cxp-56,cy+54,112,8);
       cx.fillStyle=GLOW.Hufflepuff; cx.fillRect(cxp-56,cy+54,112*pct,8);
-      cx.font='700 11px JetBrains Mono, monospace'; cx.fillStyle='rgba(255,255,255,.55)';
-      cx.fillText(c.progress+' / '+(g.cageTarget||14),cxp,cy+74);
+      cx.font=`700 ${vaultMini?20:11}px JetBrains Mono, monospace`; cx.fillStyle='rgba(255,255,255,.7)';
+      cx.fillText(c.progress+' / '+(g.cageTarget||14),cxp,cy+(vaultMini?82:74));
     }
   });
   // goblins
@@ -2681,11 +2734,12 @@ function loopVault(){
     cx.strokeStyle='#7d6b52'; cx.lineWidth=3; cx.beginPath(); cx.moveTo(14*dir,-12); cx.lineTo(20*dir,20); cx.stroke();
     cx.restore();
     // letter badge
+    const bw=vaultMini?21:13, bh=vaultMini?34:22, by=y-(vaultMini?62:52);
     cx.fillStyle=stunned>0?'rgba(94,232,143,.9)':'rgba(8,7,13,.85)';
-    cx.beginPath(); cx.roundRect ? cx.roundRect(x-13,y-52,26,22,6) : cx.rect(x-13,y-52,26,22); cx.fill();
+    cx.beginPath(); cx.roundRect ? cx.roundRect(x-bw,by,bw*2,bh,6) : cx.rect(x-bw,by,bw*2,bh); cx.fill();
     cx.strokeStyle=stunned>0?'#5ee88f':'#c9a227'; cx.lineWidth=1.6; cx.stroke();
-    cx.font='700 15px JetBrains Mono, monospace'; cx.textAlign='center';
-    cx.fillStyle=stunned>0?'#0a2a16':'#ffd9a8'; cx.fillText(letter,x,y-36);
+    cx.font=`700 ${vaultMini?25:15}px JetBrains Mono, monospace`; cx.textAlign='center';
+    cx.fillStyle=stunned>0?'#0a2a16':'#ffd9a8'; cx.fillText(letter,x,by+bh-(vaultMini?9:6));
   });
   // zap bolts
   zaps=zaps.filter(z=>performance.now()-z.t<260);
@@ -2777,6 +2831,9 @@ function loopVault(){
 
 /* ========================= QUIDDITCH — fly your own broom ========================= */
 let pCv=null,pCx=null,pRaf=null,view={},moveVec={dx:0,dy:0},moveTimer=null,keyDown={},fxq=[],shake=0;
+// true when the pitch is mirrored onto a phone — everything drawn on it needs
+// to be bigger, because the same 1600px canvas is a few hundred pixels wide.
+let pitchMini=false;
 const FW=1600, FH=900;
 function viewQuidditch(){
   scaffold=scaffoldKey(); stopLoops();
@@ -2794,22 +2851,18 @@ function viewQuidditch(){
     bracket=`<div class="row" style="margin-bottom:14px">${m('semi1','Semifinal 1')}${m('semi2','Semifinal 2')}${m('final','The Final')}</div>`;
   }
   let main='';
-  if(live&&host){
-    main=`<div class="stage-wrap"><canvas id="pCv" class="stage" width="${FW}" height="${FH}"></canvas>
+  if(live){
+    // Host and every player watch the SAME pitch. On a phone the picture is
+    // capped in height so the stick and the button stay under your thumbs.
+    main=`<div class="stage-wrap${host?'':' mirror'}" style="--ar:1.78">
+      <canvas id="pCv" class="stage" width="${FW}" height="${FH}"></canvas>
       <div class="hud"><div class="hud-top">
         <div class="panel row" style="gap:10px">
-          <span class="house-pill house-${a}">${a}</span><span class="mono" id="scA" style="font-size:1.5rem;color:${GLOW[a]}">0</span>
-          <span class="small">–</span><span class="mono" id="scB" style="font-size:1.5rem;color:${GLOW[b]}">0</span>
+          <span class="house-pill house-${a}">${a}</span><span class="mono" id="scA" style="font-size:${host?'1.5rem':'1.15rem'};color:${GLOW[a]}">0</span>
+          <span class="small">–</span><span class="mono" id="scB" style="font-size:${host?'1.5rem':'1.15rem'};color:${GLOW[b]}">0</span>
           <span class="house-pill house-${b}">${b}</span></div>
         <div class="panel clock" id="qClock">--</div></div>
         <div class="hud-bot"><div class="ticker" id="qTicker"></div></div></div></div>`;
-  } else if(!host&&live){
-    main=`<div class="card center" style="max-width:520px">
-      <div class="row" style="gap:10px;justify-content:center"><span class="house-pill house-${a}">${a}</span>
-        <span class="mono" id="scA" style="font-size:1.6rem;color:${GLOW[a]}">0</span><span class="small">–</span>
-        <span class="mono" id="scB" style="font-size:1.6rem;color:${GLOW[b]}">0</span><span class="house-pill house-${b}">${b}</span></div>
-      <div class="clock" id="qClock" style="margin-top:6px">--</div>
-      <div class="ticker" id="qTicker" style="margin-top:10px;text-align:left"></div></div>`;
   } else {
     main=`<div class="card center"><p class="narration" style="max-width:640px;margin:0 auto">
       ${!q.bracket?'Four houses. Two semifinals. One Final. Every player flies their own broom — the crowd cannot save you.'
@@ -2821,20 +2874,21 @@ function viewQuidditch(){
       ? `<div class="row" style="margin-top:18px;gap:22px;justify-content:center">
            <div class="stick" id="stick"><div class="knob" id="knob"></div></div>
            <button class="act-btn" id="actBtn">CATCH<br>THROW</button></div>
+         <p class="small center rotate-hint" style="margin-top:6px">↻ Turn your phone sideways for a bigger pitch</p>
          <p class="small center" style="margin-top:8px">Drag the stick or use WASD / arrows · SPACE to catch &amp; throw</p>
          <p class="small center" id="myStatus">—</p>`
-      : `<div class="center" style="margin-top:16px"><button class="btn ghost" onclick="sfx.catchB()">📣 Cheer from the stands</button>
-         <p class="small">${myHouse} isn't in this match — your turn comes.</p></div>`;
+      : `<div class="center" style="margin-top:12px"><button class="btn ghost" onclick="sfx.catchB()">📣 Cheer from the stands</button>
+         <p class="small">${myHouse} isn't in this match — you're watching from the stands. Your turn comes.</p></div>`;
   }
   app.innerHTML=`<div class="screen wide">
     ${(myRole==='player'&&live)
-      ? `<h2 style="color:var(--gold-hi);font-size:1.1rem;margin-bottom:6px">Quidditch — you're flying</h2>`
+      ? `<h2 style="color:var(--gold-hi);font-size:1.05rem;margin-bottom:6px">${inMatch()?'Quidditch — you\\'re flying. Your broom is the one ringed in gold.':'Quidditch — from the stands'}</h2>`
       : `<div class="eyebrow">Chapter Five</div><h1 class="title-xl deco">The Quidditch Cup</h1>`}
     ${live?'':`<p class="sub">${host?'Draw the matches, then send them up.':'Your broom appears here when your house is called.'}</p>`}
     ${(myRole==='player'&&live)?'':bracket}${main}${ctrl}
     ${host?quidHostCtrl(q,st):''}
     ${phaseJumper()}</div>`;
-  if(live&&host) startPitch();
+  if(live) startPitch();
   if(myRole==='player'&&live&&inMatch()) wireFlight();
   quidHud();
 }
@@ -2861,9 +2915,10 @@ function wireFlight(){
       let dx=(p.clientX-(r.left+r.width/2))/(r.width/2), dy=(p.clientY-(r.top+r.height/2))/(r.height/2);
       const m=Math.hypot(dx,dy); if(m>1){ dx/=m; dy/=m; }
       moveVec={dx,dy};
-      knob.style.left=(58+dx*52)+'px'; knob.style.top=(58+dy*52)+'px';
+      knobPlace(dx,dy);
     };
-    const clear=()=>{ moveVec={dx:0,dy:0}; knob.style.left='58px'; knob.style.top='58px'; };
+    const clear=()=>{ moveVec={dx:0,dy:0}; knobPlace(0,0); };
+    knobPlace(0,0);
     stick.addEventListener('pointerdown',(e)=>{ stick.setPointerCapture(e.pointerId); set(e); });
     stick.addEventListener('pointermove',(e)=>{ if(e.pressure>0||e.buttons) set(e); });
     stick.addEventListener('pointerup',clear); stick.addEventListener('pointercancel',clear);
@@ -2885,13 +2940,20 @@ function wireFlight(){
     act('move',{dx:+moveVec.dx.toFixed(2),dy:+moveVec.dy.toFixed(2)});
   },100);
 }
+// The stick shrinks on short screens, so the knob's rest position is measured
+// rather than hard-coded.
+function knobPlace(dx,dy){
+  const s=document.getElementById('stick'), k=document.getElementById('knob');
+  if(!s||!k) return;
+  const c=(s.clientWidth-k.offsetWidth)/2, r=c*0.9;
+  k.style.left=(c+dx*r)+'px'; k.style.top=(c+dy*r)+'px';
+}
 function applyKeys(){
   let dx=0,dy=0; const K=window.__K||{};
   Object.keys(keyDown).forEach(k=>{ if(K[k]){ dx+=K[k][0]; dy+=K[k][1]; } });
   const m=Math.hypot(dx,dy); if(m>1){ dx/=m; dy/=m; }
   moveVec={dx,dy};
-  const knob=document.getElementById('knob');
-  if(knob){ knob.style.left=(58+dx*52)+'px'; knob.style.top=(58+dy*52)+'px'; }
+  knobPlace(dx,dy);
 }
 function doAct(){ sfx.catchB(); act('act'); if(navigator.vibrate){try{navigator.vibrate(12);}catch(_){}}}
 
@@ -2906,10 +2968,11 @@ function quidHud(){
     if(st==='countdown'){ const n=Math.max(1,Math.ceil((q.startsAt||0)-Date.now()/1000)); c.textContent='… '+n; c.className='panel clock'; }
     else { const tl=FR&&FR.tl!=null?FR.tl:Math.max(0,(q.endsAt||0)-Date.now()/1000);
       c.textContent=Math.floor(tl/60)+':'+String(Math.floor(tl%60)).padStart(2,'0');
-      c.className=(myRole==='host'?'panel ':'')+'clock'+(tl<=30?' urgent':''); }
+      c.className='panel clock'+((q.snitchOut||tl<=30)?' urgent':''); }
   }
   const tk=document.getElementById('qTicker');
-  if(tk){ const ev=((FR&&FR.ev)||q.events||[]).slice(-3); tk.innerHTML=ev.map(e=>`<div>${e.text}</div>`).join('')||'<div>Brooms up…</div>'; }
+  if(tk){ const ev=((FR&&FR.ev)||q.events||[]).slice(myRole==='host'?-3:-1);
+    tk.innerHTML=ev.map(e=>`<div>${e.text}</div>`).join('')||'<div>Brooms up…</div>'; }
   const ms=document.getElementById('myStatus');
   if(ms&&FR&&FR.p){
     const me=FR.p.find(x=>x[0]===myPid);
@@ -2936,15 +2999,18 @@ function handleFlashes(){
     else if(f.kind==='dragon_win'){ sfx.fanfare(); burst(['#e0663a','#f5dd8a'],200); }
   }
 }
-function startPitch(){ pCv=document.getElementById('pCv'); if(!pCv) return; pCx=pCv.getContext('2d'); view={}; fxq=[]; stopPitch(); loopPitch(); }
+function startPitch(){ pCv=document.getElementById('pCv'); if(!pCv) return; pCx=pCv.getContext('2d');
+  pitchMini=myRole!=='host'; view={}; fxq=[]; stopPitch(); loopPitch(); }
 function stopPitch(){ if(pRaf){ cancelAnimationFrame(pRaf); pRaf=null; } }
 // Must mirror hoops() in app.py exactly — the server scores off these.
 function hoopSet(side){
   return side===0 ? [[118,330,50],[196,226,56],[274,344,44]]
                   : [[FW-118,330,50],[FW-196,226,56],[FW-274,344,44]];
 }
+let pitchSkip=false;
 function loopPitch(){
   pRaf=requestAnimationFrame(loopPitch);
+  if(pitchMini){ pitchSkip=!pitchSkip; if(pitchSkip) return; }
   const cx=pCx; if(!cx||!S) return;
   const t=performance.now()/1000;
   const q=S.quidditch, [a,b]=q.houses||[];
@@ -2967,10 +3033,13 @@ function loopPitch(){
   });
   Object.keys(view).forEach(k=>{ if(!(FR.p||[]).some(p=>String(p[0])===k)) delete view[k]; });
   // bludgers
+  const br=pitchMini?22:14;
   (FR.b||[]).forEach(bl=>{
-    const g=cx.createRadialGradient(bl[0]-4,bl[1]-4,2,bl[0],bl[1],16);
-    g.addColorStop(0,'#6b6b78'); g.addColorStop(1,'#14141b');
-    cx.fillStyle=g; cx.beginPath(); cx.arc(bl[0],bl[1],14,0,7); cx.fill();
+    const g=cx.createRadialGradient(bl[0]-4,bl[1]-4,2,bl[0],bl[1],br+2);
+    g.addColorStop(0,'#8a8a99'); g.addColorStop(1,'#14141b');
+    cx.fillStyle=g; cx.beginPath(); cx.arc(bl[0],bl[1],br,0,7); cx.fill();
+    if(pitchMini){ cx.strokeStyle='rgba(255,120,120,.5)'; cx.lineWidth=3;
+      cx.beginPath(); cx.arc(bl[0],bl[1],br+7,0,7); cx.stroke(); }
   });
   // players
   (FR.p||[]).forEach(p=>{
@@ -2980,24 +3049,27 @@ function loopPitch(){
   });
   // quaffle
   if(FR.q){
-    const x=FR.q[0],y=FR.q[1];
-    const g=cx.createRadialGradient(x-4,y-4,1,x,y,16);
+    const x=FR.q[0],y=FR.q[1], qr=pitchMini?22:14;
+    if(pitchMini){ const h=cx.createRadialGradient(x,y,2,x,y,64);
+      h.addColorStop(0,'rgba(255,150,90,.55)'); h.addColorStop(1,'rgba(255,150,90,0)');
+      cx.fillStyle=h; cx.beginPath(); cx.arc(x,y,64,0,7); cx.fill(); }
+    const g=cx.createRadialGradient(x-4,y-4,1,x,y,qr+2);
     g.addColorStop(0,'#ffb28a'); g.addColorStop(1,'#a83b16');
-    cx.fillStyle=g; cx.beginPath(); cx.arc(x,y,14,0,7); cx.fill();
-    cx.strokeStyle='rgba(0,0,0,.45)'; cx.lineWidth=2; cx.beginPath(); cx.arc(x,y,14,0,7); cx.stroke();
-    if(carrier==null){ cx.strokeStyle='rgba(255,255,255,.35)'; cx.lineWidth=2;
-      cx.beginPath(); cx.arc(x,y,22+Math.sin(t*6)*4,0,7); cx.stroke(); }
+    cx.fillStyle=g; cx.beginPath(); cx.arc(x,y,qr,0,7); cx.fill();
+    cx.strokeStyle='rgba(0,0,0,.45)'; cx.lineWidth=2; cx.beginPath(); cx.arc(x,y,qr,0,7); cx.stroke();
+    if(carrier==null){ cx.strokeStyle='rgba(255,255,255,.5)'; cx.lineWidth=pitchMini?4:2;
+      cx.beginPath(); cx.arc(x,y,qr+10+Math.sin(t*6)*5,0,7); cx.stroke(); }
   }
   // snitch
   if(FR.s){
-    const [x,y]=FR.s;
-    const g=cx.createRadialGradient(x,y,1,x,y,40);
+    const [x,y]=FR.s, k=pitchMini?1.7:1;
+    const g=cx.createRadialGradient(x,y,1,x,y,40*k);
     g.addColorStop(0,'rgba(255,246,200,.95)'); g.addColorStop(1,'rgba(245,221,138,0)');
-    cx.fillStyle=g; cx.beginPath(); cx.arc(x,y,40,0,7); cx.fill();
-    cx.fillStyle='#ffe98a'; cx.beginPath(); cx.arc(x,y,9,0,7); cx.fill();
+    cx.fillStyle=g; cx.beginPath(); cx.arc(x,y,40*k,0,7); cx.fill();
+    cx.fillStyle='#ffe98a'; cx.beginPath(); cx.arc(x,y,9*k,0,7); cx.fill();
     const fl=Math.sin(t*26)*1.1;
-    cx.strokeStyle='rgba(255,255,255,.85)'; cx.lineWidth=2.5;
-    [-1,1].forEach(s=>{ cx.beginPath(); cx.ellipse(x+s*15,y-4,14,5+fl*4,s*.5,0,7); cx.stroke(); });
+    cx.strokeStyle='rgba(255,255,255,.85)'; cx.lineWidth=2.5*k;
+    [-1,1].forEach(s=>{ cx.beginPath(); cx.ellipse(x+s*15*k,y-4*k,14*k,(5+fl*4)*k,s*.5,0,7); cx.stroke(); });
   }
   // goal fx
   fxq=fxq.filter(e=>performance.now()-e.t<1300);
@@ -3069,8 +3141,20 @@ function drawGround(cx,t,a,b){
 function drawFlyer(cx,x,y,house,name,t,stunned,carrier,isMe){
   const glow=GLOW[house]||'#fff', bar=BAR[house]||'#888', dark=DARK[house]||'#222';
   cx.save(); cx.translate(x,y);
-  if(isMe){ cx.strokeStyle=glow; cx.globalAlpha=.5+Math.sin(t*4)*.2; cx.lineWidth=3;
-    cx.beginPath(); cx.arc(0,0,44,0,7); cx.stroke(); cx.globalAlpha=1; }
+  if(isMe){
+    // On a phone the whole 1600px pitch is squeezed into a few hundred, so the
+    // "that one is me" marker has to be loud: two gold rings and a chevron.
+    cx.strokeStyle='#ffe98a'; cx.lineWidth=pitchMini?7:4;
+    cx.globalAlpha=.75+Math.sin(t*4)*.25;
+    cx.beginPath(); cx.arc(0,0,pitchMini?56:44,0,7); cx.stroke();
+    cx.globalAlpha=.35; cx.lineWidth=pitchMini?3:2;
+    cx.beginPath(); cx.arc(0,0,pitchMini?72:56,0,7); cx.stroke();
+    cx.globalAlpha=1;
+    const bob=Math.sin(t*5)*5, cs=pitchMini?26:16;
+    cx.fillStyle='#ffe98a'; cx.beginPath();
+    cx.moveTo(-cs,-(pitchMini?96:70)+bob); cx.lineTo(cs,-(pitchMini?96:70)+bob);
+    cx.lineTo(0,-(pitchMini?66:50)+bob); cx.closePath(); cx.fill();
+  }
   if(carrier){ const g=cx.createRadialGradient(0,0,3,0,0,60);
     g.addColorStop(0,'rgba(255,140,90,.5)'); g.addColorStop(1,'rgba(255,140,90,0)');
     cx.fillStyle=g; cx.beginPath(); cx.arc(0,0,60,0,7); cx.fill(); }
@@ -3087,11 +3171,17 @@ function drawFlyer(cx,x,y,house,name,t,stunned,carrier,isMe){
   cx.fillStyle='#e8c9a0'; cx.beginPath(); cx.arc(9,-15,5.6,0,7); cx.fill();
   cx.fillStyle=dark; cx.beginPath(); cx.arc(7,-17,6.2,Math.PI*.85,Math.PI*2.05); cx.fill();
   cx.restore();
-  if(stunned){ cx.fillStyle='#fff'; cx.font='700 18px serif'; cx.textAlign='center'; cx.fillText('💫',0,-42); }
-  cx.font='700 15px Cinzel, serif'; cx.textAlign='center';
-  cx.fillStyle='rgba(6,6,12,.6)'; const w=cx.measureText(name).width+12;
-  cx.fillRect(-w/2,-40,w,20);
-  cx.fillStyle=glow; cx.fillText(name,0,-25);
+  if(stunned){ cx.fillStyle='#fff'; cx.font=(pitchMini?'700 30px':'700 18px')+' serif'; cx.textAlign='center'; cx.fillText('💫',0,pitchMini?-58:-42); }
+  // On the mirrored pitch fourteen name plates at readable size would be a
+  // wall of text, so only the two that matter are labelled: you, and whoever
+  // has the Quaffle.
+  if(pitchMini&&!isMe&&!carrier){ cx.restore(); return; }
+  const fs=pitchMini?25:15, lbl=isMe?'YOU · '+name:name, ph=pitchMini?32:20, py=pitchMini?-56:-40;
+  cx.font=`${isMe?900:700} ${fs}px Cinzel, serif`; cx.textAlign='center';
+  cx.fillStyle=isMe?'rgba(60,42,0,.82)':'rgba(6,6,12,.62)';
+  const w=cx.measureText(lbl).width+(pitchMini?18:12);
+  cx.fillRect(-w/2,py,w,ph);
+  cx.fillStyle=isMe?'#ffe98a':glow; cx.fillText(lbl,0,py+ph-(pitchMini?10:5));
   cx.restore();
 }
 
