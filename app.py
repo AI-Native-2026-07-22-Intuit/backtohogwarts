@@ -1298,6 +1298,14 @@ async def host_action(action: str, payload: dict):
         RT_GEN += 1
         STATE["phase"] = payload.get("phase", STATE["phase"])
 
+    elif action == "reset_scores":
+        # start the night over with everyone still in their seats
+        await do_reset(drop_guests=False)
+
+    elif action == "reset_all":
+        # …and forget the guests too, so the roster is back to the 27
+        await do_reset(drop_guests=True)
+
     elif action == "sorting_start":
         s = STATE["sorting"]
         if s["state"] != "counting":
@@ -1468,18 +1476,53 @@ async def api_names(request):
     return JSONResponse({"names": ALL_NAMES})
 
 
-async def api_reset(request):
+async def do_reset(drop_guests: bool):
+    """Wipe the night back to an empty Hall.
+
+    Everything that scores lives in STATE, so replacing it *is* the reset.
+    The two flavours differ only in whether guests are forgotten:
+
+      drop_guests=False  scores, stats and all five games go; everyone stays
+                         connected and keeps their name and house, so you can
+                         run the whole thing again with nobody rejoining.
+      drop_guests=True   also forgets every guest, putting the roster back to
+                         the 27 names. Guests are disconnected, because a
+                         socket keeps its identity in local variables for the
+                         life of the connection — the only way to truly
+                         un-admit someone is to close their socket.
+
+    Bumping RT_GEN first is what stops an in-flight game loop from writing
+    into the state we are about to throw away.
+    """
     global STATE, RT_GEN
-    if request.query_params.get("pin") != HOST_PIN:
-        return JSONResponse({"ok": False, "error": "wrong pin"}, status_code=403)
     RT_GEN += 1
     STATE = fresh_state()
     INPUT.clear()
-    GUESTS.clear()
-    for k in [k for k, v in NAME_TO_HOUSE.items() if k not in {n.lower() for n in ALL_NAMES}]:
-        NAME_TO_HOUSE.pop(k, None)
+    if drop_guests:
+        guest_names = {n.lower() for n in GUESTS}
+        GUESTS.clear()
+        for k in list(guest_names):
+            NAME_TO_HOUSE.pop(k, None)
+        for pid in [p for p, v in PLAYERS.items() if v["name"].lower() in guest_names]:
+            PLAYERS.pop(pid, None)
+        for ws, info in list(CONNECTIONS.items()):
+            if (info.get("name") or "").lower() in guest_names:
+                drop_connection(ws)
+                try:
+                    await ws.send_text(json.dumps({"type": "error", "final": True,
+                                                   "message": "The Hall has been reset. Join again to play."}))
+                    await ws.close()
+                except Exception:
+                    pass
     await broadcast()
-    return JSONResponse({"ok": True})
+
+
+async def api_reset(request):
+    if request.query_params.get("pin") != HOST_PIN:
+        return JSONResponse({"ok": False, "error": "wrong pin"}, status_code=403)
+    # ?keep_guests=1 leaves everyone signed in; the bare URL is the full wipe
+    await do_reset(drop_guests=request.query_params.get("keep_guests") not in ("1", "true", "yes"))
+    return JSONResponse({"ok": True, "guests": len(GUESTS)})
 
 
 app = Starlette(routes=[
@@ -1550,6 +1593,8 @@ input[type=text],select{font-family:'Spectral',serif; font-size:1.05rem; padding
 .topbar{position:fixed; top:0; left:0; right:0; display:flex; justify-content:space-between; align-items:center; padding:8px 12px; z-index:60; font-size:.76rem; color:var(--mist); pointer-events:none;}
 .topbar > *{pointer-events:auto;}
 .chip-btn{background:rgba(0,0,0,.45); border:1px solid rgba(217,207,174,.2); color:var(--parchment); border-radius:8px; padding:6px 10px; cursor:pointer; font-size:.78rem;}
+.chip-btn.danger{border-color:rgba(208,90,74,.45); color:#e8a89f;}
+.chip-btn.danger:hover{border-color:var(--danger); color:#ffc9c0;}
 .scoreboard{position:fixed; bottom:0; left:0; right:0; display:flex; z-index:50; border-top:1px solid rgba(212,175,55,.22); background:rgba(8,7,13,.92); backdrop-filter:blur(8px);}
 .scoreboard .seg{flex:1; text-align:center; padding:6px 3px; font-family:'Cinzel',serif; font-size:.68rem;}
 .scoreboard .seg b{display:block; font-size:.98rem; color:var(--gold-hi); font-family:'JetBrains Mono',monospace;}
@@ -1781,13 +1826,19 @@ function connectAsPlayer(n,guest){
 function wire(onWelcome){
   connStatusEl.textContent='connecting…';
   ws.onopen=()=>{ connStatusEl.textContent='● live'; };
-  ws.onclose=()=>{ connStatusEl.textContent='○ reconnecting…';
-    setTimeout(()=>{ if(myRole==='host') connectAsHost(localStorage.getItem('hp_pin')); else if(myRole==='player') connectAsPlayer(myName); },1400); };
+  ws.onclose=()=>{
+    // a refusal the server called final (e.g. the Hall was reset out from
+    // under a guest) must not turn into a 1.4s retry loop
+    if(window.__noRetry){ connStatusEl.textContent='○ signed out'; return; }
+    connStatusEl.textContent='○ reconnecting…';
+    setTimeout(()=>{ if(window.__noRetry) return;
+      if(myRole==='host') connectAsHost(localStorage.getItem('hp_pin'));
+      else if(myRole==='player') connectAsPlayer(myName,localStorage.getItem('hp_guest')==='1'); },1400); };
   ws.onerror=()=>{};
   ws.onmessage=(ev)=>{
     const m=JSON.parse(ev.data);
     if(m.type==='welcome'){ if(m.role==='player'){ myHouse=m.house; myPid=m.pid; } onWelcome&&onWelcome(); updateWho(); }
-    else if(m.type==='error'){ showError(m.message); }
+    else if(m.type==='error'){ if(m.final){ window.__noRetry=1; try{localStorage.clear();}catch(e){} } showError(m.message); }
     else if(m.type==='state'){ S=m.state; FR=null; render(); }
     else if(m.type==='f'){ if(!S) return; FR=m.f; if(m.points) S.points=m.points; onFrame(); }
   };
@@ -1861,7 +1912,29 @@ function phaseJumper(){
   return `<div class="row no-print" style="margin-top:22px;gap:6px;opacity:.65">
     <span class="small" style="margin-right:4px">jump to:</span>
     ${PHASES.map(([k,l])=>`<button class="chip-btn" ${S.phase===k?'style="border-color:var(--gold);color:var(--gold-hi)"':''}
-      onclick="jumpTo('${k}')">${l}</button>`).join('')}</div>`;
+      onclick="jumpTo('${k}')">${l}</button>`).join('')}</div>
+  <div class="row no-print" style="margin-top:8px;gap:6px;opacity:.45">
+    <span class="small" style="margin-right:4px">reset:</span>
+    <button class="chip-btn danger" onclick="resetScores()">↺ Scores only</button>
+    <button class="chip-btn danger" onclick="resetAll()">⚠ Everything + guests</button></div>`;
+}
+// Two deliberate speed bumps, because either of these mid-event would be a
+// disaster: a confirm that spells out the consequence, and a second one that
+// names how many points are about to go.
+function resetScores(){
+  if(!confirm('Start the night over?\\n\\nScores, stats and all five games are wiped. '
+    +'Everyone stays connected with the same name and house — nobody has to rejoin.')) return;
+  const tot=HOUSES.reduce((a,h)=>a+(S.points[h]||0),0);
+  if(tot>0&&!confirm(`There are ${tot} house points on the board. Really throw them away?`)) return;
+  sfx.whoosh(); send('host_action','reset_scores');
+}
+function resetAll(){
+  const guests=Object.values((S&&S.guestMembers)||{}).flat().length;
+  if(!confirm('Reset everything?\\n\\nScores and all five games are wiped, AND '
+    +`every guest is forgotten (${guests} right now) — they will be sent back to the join screen. `
+    +'People on the 27-name roster stay connected.')) return;
+  if(!confirm('Last chance. This cannot be undone.')) return;
+  sfx.whoosh(); send('host_action','reset_all');
 }
 function jumpTo(k){
   if(S.phase===k) return;
