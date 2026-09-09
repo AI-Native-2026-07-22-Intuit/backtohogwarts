@@ -1,0 +1,14 @@
+# Render Blueprint. With this file in the repo you can use
+# Render → New → Blueprint and it fills in the build/start commands itself.
+services:
+  - type: web
+    name: hogwarts-house-cup
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: HOST_PIN
+        sync: false          # Render will prompt you to type this
+      - key: ALLOW_GUESTS
+        value: "1"           # set to 0 to lock the roster for the real night
