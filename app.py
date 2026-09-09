@@ -2323,7 +2323,7 @@ function viewOwls(){
     ${(myRole==='player'&&st==='live')
       ? `<h2 style="color:var(--gold-hi);font-size:1.1rem;margin-bottom:6px">O.W.L. Examination</h2>`
       : `<div class="eyebrow">Chapter Four</div><h1 class="title-xl deco">Ordinary Wizarding Levels</h1>
-         <p class="sub">Eighteen questions. Java, React, Kubernetes, AWS, LLMs and MCP. Quills ready.</p>`}
+         <p class="sub">Ten questions. Java, React, Kubernetes, AWS, LLMs and MCP. Quills ready.</p>`}
     ${host?`<div class="stage-wrap"><canvas id="owlCv" class="stage" width="1200" height="620"></canvas>
       <div class="hud"><div class="hud-top">
         <div class="panel"><div class="eyebrow" style="margin:0">The Great Hall — examinations</div>
