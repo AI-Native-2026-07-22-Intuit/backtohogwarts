@@ -3050,19 +3050,36 @@ function startMatch(m){ sfx.whistle(); send('host_action','quidditch_start_match
 // under-weighted bonus (see BONUS_WIN_POINTS/BONUS_LOSE_POINTS in app.py) so
 // it can't rewrite who's actually winning the Cup. Available any time the
 // pitch is empty, whether or not the bracket has even been drawn.
+//
+// Collapsed to a single small link by default: Draw the Matches / Start
+// Semifinal / Start THE FINAL is the real show and has to read as the one
+// thing on the page that matters. bonusOpen persists across re-renders (the
+// host screen redraws on every state push) so the panel doesn't snap shut
+// while someone's mid-pick; it resets once a match actually starts.
+let bonusOpen=false;
 function houseOptions(selected){
   return HOUSES.map(h=>`<option value="${h}" ${h===selected?'selected':''}>${h}</option>`).join('');
 }
 function bonusPicker(q){
+  const played=(q.bonusLog||[]).length;
+  if(!bonusOpen){
+    return `<div style="margin-top:16px"><button class="chip-btn" style="opacity:.6" onclick="toggleBonus()">
+      + Play another match${played?` <span class="mono">(${played} played)</span>`:''}</button></div>`;
+  }
   const win=q.bonusWinPoints||60, lose=q.bonusLosePoints||20;
   const log=(q.bonusLog||[]).slice(-3).reverse().map(bm=>{
     const [ha,hb]=bm.houses, loserH=bm.winner===ha?hb:ha;
     return `<div class="small" style="opacity:.8;margin-top:3px">🏆 <span style="color:${GLOW[bm.winner]}">${bm.winner}</span> beat ${loserH} — ${bm.score[ha]}–${bm.score[hb]}</div>`;
   }).join('');
-  return `<div class="card" style="margin-top:16px;max-width:520px;padding:16px 20px">
-    <div class="eyebrow" style="margin-bottom:4px">Play another match?</div>
-    <p class="small" style="margin:0 0 10px">Any two houses, as many times as you like — worth +${win} to the winner
-      and +${lose} to the loser, well under a semifinal, so it's just for fun.</p>
+  return `<div class="card" style="margin-top:16px;max-width:520px;padding:14px 18px">
+    <div class="row" style="justify-content:space-between;align-items:flex-start;gap:10px">
+      <div>
+        <div class="eyebrow" style="margin-bottom:4px">Play another match?</div>
+        <p class="small" style="margin:0 0 10px">Any two houses, as many times as you like — worth +${win} to the
+          winner and +${lose} to the loser, well under a semifinal, so it's just for fun.</p>
+      </div>
+      <button class="chip-btn" style="opacity:.6;flex:0 0 auto" onclick="toggleBonus()">✕</button>
+    </div>
     <div class="row" style="gap:8px;align-items:center;flex-wrap:wrap">
       <select id="bonusA" class="mono">${houseOptions(HOUSES[0])}</select>
       <span class="small">vs</span>
@@ -3072,10 +3089,11 @@ function bonusPicker(q){
     ${log?`<div style="margin-top:8px">${log}</div>`:''}
   </div>`;
 }
+function toggleBonus(){ sfx.click(); bonusOpen=!bonusOpen; render(); }
 function startBonus(){
   const a=document.getElementById('bonusA').value, b=document.getElementById('bonusB').value;
   if(a===b){ alert('Pick two different houses to play each other.'); return; }
-  sfx.whistle(); send('host_action','quidditch_start_bonus',{a,b});
+  bonusOpen=false; sfx.whistle(); send('host_action','quidditch_start_bonus',{a,b});
 }
 
 function wireFlight(){
