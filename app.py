@@ -1149,10 +1149,10 @@ def step_gringotts():
         if all(c["free"] for c in g["cages"]) and g["state"] == "live":
             g["state"] = "dragon"
             g["dragonEndsAt"] = now + DRAGON_SECONDS
-            # scale with who is actually here: ~6 clanks each, floor of 40,
+            # scale with who is actually here: ~6 clanks each, floor of 200,
             # so a 4-person rehearsal isn't asked for 150
             heads = max(1, sum(1 for i in CONNECTIONS.values() if i.get("role") == "player"))
-            g["dragonTarget"] = max(40, min(DRAGON_TARGET, heads * 6))
+            g["dragonTarget"] = max(200, min(DRAGON_TARGET, heads * 6))
             g["clanks"] = 0
             g["goblins"] = []
             say("gringotts", "All three are free — but the guard dragon has woken. CLANKERS! Everyone, together!", "dragon")
